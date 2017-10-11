@@ -1,0 +1,6 @@
+# Ignore Python bytecode.
+*.pyc
+*.pyo
+
+# Ignore topographic data.
+shared/topography
