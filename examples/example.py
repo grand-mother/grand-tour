@@ -5,7 +5,7 @@ import numpy
 import pylab
 
 # Instanciate the topography.
-topo = Topography(42.928056, 86.741667, "shared/topography")
+topo = Topography(42.928056, 86.741667, "share/topography")
 
 # Sample the local altitude over a mesh.
 t0 = time.time()
@@ -19,7 +19,7 @@ print "  --> Done in {:.1f}s".format(time.time() - t0)
 
 # Sample the geodetic altitude over a mesh in UTM coordinates.
 t0 = time.time()
-print "o Sampling the local altitude ..."
+print "o Sampling the UTM altitude ..."
 xUTM, yUTM, _ = topo.local_to_utm((0., 0., 0.))
 zUTM = numpy.zeros((len(y), len(x)))
 for i, yi in enumerate(y):
