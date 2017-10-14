@@ -253,6 +253,47 @@ class Topography(Datum, Projection):
     def is_above(self, position):
         """Check if the given local position is above the ground.
         """
+        return self._vertical_distance(position) > 0.
+
+    def distance(self, position, direction=None, limit=None):
+        """Compute the distance to the topography for the given point,
+           or segment.
+        """
+        if direction:
+            # Let us step along the given direction until the ground is
+            # reached.
+            above = self.is_above(position)
+            r0 = [c for c in position]
+            distance = 0.
+            while True:
+                step = 0.5 * abs(self._vertical_distance(position))
+                if step < 1E-02: step = 1E-02
+                r1 = [r0[i] + step * direction[i] for i in xrange(3)]
+                try: above1 = self.is_above(r1)
+                except TurtleError: return None
+                if above1 != above:
+                    # A medium change was found. Let us refine with a
+                    # binary search.
+                    while step > 1E-02:
+                        r2 = [0.5 * (r0[i] + r1[i]) for i in xrange(3)]
+                        if self.is_above(r2) == above: r0 = r2
+                        else: r1 = r2
+                        step *= 0.5
+                    distance = sum((r1[i] - position[i])**2
+                      for i in xrange(3))**0.5
+                    if limit and (distance > limit): return None
+                    return distance
+                elif abs(r1[2]) > 1E+04: return None
+                if limit:
+                    distance += step
+                    if distance > limit: return None
+                r0 = r1
+        else:
+            # Let us return the vertical distance to the ground.
+            return self._vertical_distance(position)
+
+    def _vertical_distance(self, position):
+        """Compute the vertical distance to the ground."""
         lla = self.local_to_lla(position)
         ground = super(Topography, self).ground_altitude(lla[0], lla[1])
-        return ground < lla[2]
+        return lla[2] - ground
