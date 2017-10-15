@@ -36,8 +36,17 @@ static void handle_turtle_error(enum turtle_return rc, turtle_caller_t * caller)
 /* The low level topography data. */
 typedef struct {
         PyObject_HEAD
+        /* TURTLE handles. */
         struct turtle_datum * datum;
         struct turtle_projection * projection;
+        /* Flag to check for TURTLE's error handling. */
+        int catch;
+        /* Flag for a flat topography. */
+        int flat;
+        double flat_size;
+        /* Local frame parameters. */
+        double latitude;
+        double longitude;
         double origin[3];
         double base[3][3];
 } TopographyObject;
@@ -56,11 +65,33 @@ static int topography_init(
         if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dds|i", kwlist,
             &latitude, &longitude, &path, &stack_size))
                 return -1;
+        self->catch = 0;
+        self->latitude = latitude;
+        self->longitude = longitude;
 
         /* Create the datum. */
         if ((turtle_datum_create(path, stack_size, NULL, NULL, &self->datum))
             != TURTLE_RETURN_SUCCESS)
                 return -1;
+
+        /* Check for a flat topography and parse its size whenever provided. */
+        if (strncmp(path, "flat", 4) == 0) {
+                self->flat = 1;
+                if (strlen(path) > 5) {
+                        char * endptr;
+                        self->flat_size = 0.5 * strtod(path + 5, &endptr);
+                        if (*endptr != 0) {
+                                PyErr_SetString(PyExc_ValueError,
+                                    "invalid size for flat topography");
+                                return -1;
+                        }
+                } else {
+                        self->flat_size = 1.;
+                }
+        } else {
+                self->flat = 0;
+                self->flat_size = 0.;
+        }
 
         /* Create the UTM projection. */
         static char name[8];
@@ -185,6 +216,29 @@ static PyObject * topography_utm_to_local(
         return Py_BuildValue("(d,d,d)", local[0], local[1], local[2]);
 }
 
+/* Encapsulate TURTLE calls to elevation in order to check for a flat
+ * topography.
+ */
+static enum turtle_return ground_elevation(TopographyObject * self,
+    double latitude, double longitude, double * z)
+{
+        if (self->flat) {
+                *z = 0.;
+                if ((fabs(latitude - self->latitude) > self->flat_size) ||
+                    (fabs(longitude - self->longitude) > self->flat_size)) {
+                        if (!self->catch) handle_turtle_error(
+                            TURTLE_RETURN_PATH_ERROR,
+                            (turtle_caller_t *)turtle_datum_elevation);
+                        return TURTLE_RETURN_PATH_ERROR;
+                } else {
+                        return TURTLE_RETURN_SUCCESS;
+                }
+        } else {
+                return turtle_datum_elevation(
+                    self->datum, latitude, longitude, z);
+        }
+}
+
 /* Get the ground altitude in local frame coordinates or in geodetic ones. */
 static PyObject * topography_ground_altitude(
     TopographyObject * self, PyObject * args, PyObject * kwargs)
@@ -203,8 +257,7 @@ static PyObject * topography_ground_altitude(
                  * altitude above the ellipsoid.
                  */
                 double z;
-                if (turtle_datum_elevation(self->datum, x, y, &z)
-                    != TURTLE_RETURN_SUCCESS)
+                if (ground_elevation(self, x, y, &z) != TURTLE_RETURN_SUCCESS)
                         return NULL;
                 return Py_BuildValue("d", z);
         }
@@ -223,7 +276,7 @@ static PyObject * topography_ground_altitude(
                     != TURTLE_RETURN_SUCCESS)
                         return NULL;
                 double z;
-                if (turtle_datum_elevation(self->datum, latitude, longitude, &z)
+                if (ground_elevation(self, latitude, longitude, &z)
                     != TURTLE_RETURN_SUCCESS)
                         return NULL;
 
@@ -254,7 +307,7 @@ static enum turtle_return vertical_distance(
             != TURTLE_RETURN_SUCCESS)
                 return rc;
         double z;
-        if ((rc = turtle_datum_elevation(self->datum, latitude, longitude, &z))
+        if ((rc = ground_elevation(self, latitude, longitude, &z))
             != TURTLE_RETURN_SUCCESS)
                 return rc;
 
@@ -329,6 +382,7 @@ static PyObject * topography_distance(
         double r0[3] = { position[0], position[1], position[2] };
         double distance = 0.;
         turtle_handler(NULL);
+        self->catch = 1;
         for (;;) {
                 double step;
                 if (vertical_distance(self, r0, &step) != TURTLE_RETURN_SUCCESS)
@@ -367,6 +421,8 @@ static PyObject * topography_distance(
                         if ((limit > 0.) && (distance > limit))
                                 break;
                         if (!above) distance = -distance;
+                        turtle_handler(&handle_turtle_error);
+                        self->catch = 0;
                         return Py_BuildValue("d", distance);
                 } else if (fabs(r1[2] > 1E+04))
                         break;
@@ -378,6 +434,7 @@ static PyObject * topography_distance(
         }
 
         turtle_handler(&handle_turtle_error);
+        self->catch = 0;
         Py_RETURN_NONE;
 }
 
