@@ -24,7 +24,8 @@ xUTM, yUTM, _ = topo.local_to_utm((0., 0., 0.))
 zUTM = numpy.zeros((len(y), len(x)))
 for i, yi in enumerate(y):
     for j, xj in enumerate(x):
-        latitude, longitude = topo.unproject(xj + xUTM, yi + yUTM)
+        local = topo.utm_to_local(xj + xUTM, yi + yUTM, 0.)
+        latitude, longitude, _ = topo.local_to_lla(local)
         zUTM[i, j] = topo.ground_altitude(latitude, longitude, geodetic=True)
 print "  --> Done in {:.1f}s".format(time.time() - t0)
 
