@@ -127,6 +127,25 @@ static void topography_destroy(TopographyObject * self)
         Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
+/* Utility function for parsing an arbitrary sequence as a vector. */
+static int parse_vector(PyObject * object, int n, double * vector)
+{
+        const int size = PySequence_Length(object);
+        if (size < n) return -1;
+        int i;
+        for (i = 0; i < n; i++) {
+                PyObject * value = PySequence_GetItem(object, i);
+                if (value == NULL) return -1;
+                PyObject * float_ = PyNumber_Float(value);
+                Py_DECREF(value);
+                if (float_ == NULL) return -1;
+                vector[i] = PyFloat_AsDouble(float_);
+                Py_DECREF(float_);
+                if (PyErr_Occurred() != NULL) return -1;
+        }
+        return 0;
+}
+
 /* Convert a cartesian position in local frame to a geodetic one. */
 static int local_to_lla(TopographyObject * self, double * local,
     double * latitude, double * longitude, double * altitude)
@@ -143,7 +162,7 @@ static PyObject * topography_local_to_lla(
     TopographyObject * self, PyObject * position)
 {
         double local[3];
-        if (!PyArg_ParseTuple(position, "ddd", local, local + 1, local + 2))
+        if (parse_vector(position, 3, local) != 0)
                 return NULL;
         double latitude = 0, longitude = 0, altitude = 0;
         if (local_to_lla(self, local, &latitude, &longitude, &altitude) != 0)
@@ -156,7 +175,7 @@ static PyObject * topography_local_to_utm(
     TopographyObject * self, PyObject * position)
 {
         double local[3];
-        if (!PyArg_ParseTuple(position, "ddd", local, local + 1, local + 2))
+        if (parse_vector(position, 3, local) != 0)
                 return NULL;
         double latitude = 0., longitude = 0., altitude = 0.;
         if (local_to_lla(self, local, &latitude, &longitude, &altitude) != 0)
@@ -332,7 +351,7 @@ static PyObject * topography_is_above(
     TopographyObject * self, PyObject * position)
 {
         double local[3];
-        if (!PyArg_ParseTuple(position, "ddd", local, local + 1, local + 2))
+        if (parse_vector(position, 3, local) != 0)
                 return NULL;
         int status;
         if (is_above(self, local, &status) != 0)
@@ -354,8 +373,7 @@ static PyObject * topography_distance(
                 return NULL;
 
         double position[3];
-        if (!PyArg_ParseTuple(position_obj, "ddd", position, position + 1,
-            position + 2))
+        if (parse_vector(position_obj, 3, position) != 0)
                 return NULL;
 
         if (direction_obj == NULL) {
@@ -370,9 +388,8 @@ static PyObject * topography_distance(
         /* Let us step along the given direction until the ground is
          * reached.
          */
-         double direction[3];
-         if (!PyArg_ParseTuple(direction_obj, "ddd", direction, direction + 1,
-             direction + 2))
+        double direction[3];
+        if (parse_vector(direction_obj, 3, direction) != 0)
                 return NULL;
 
         const double resolution = 1E-02;
