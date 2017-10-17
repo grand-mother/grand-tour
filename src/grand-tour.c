@@ -328,7 +328,7 @@ static PyObject * topography_ground_altitude(
 {
         /* Parse the arguments. */
         double x, y;
-        int geodetic;
+        int geodetic = 0;
 
         static char * kwlist[] = { "x", "y", "geodetic", NULL };
         if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dd|b", kwlist,
