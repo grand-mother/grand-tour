@@ -102,14 +102,17 @@ static int topography_init(
             != TURTLE_RETURN_SUCCESS)
                 return -1;
 
-        /* Compute the local frame. */
+        /*
+         * Compute the local frame using GRAND conventions, i.e. x-axis goes
+         * from South to North, y-axis goes from East to West.
+         */
         if ((turtle_datum_ecef(self->datum, latitude, longitude, 0.,
             self->origin)) != TURTLE_RETURN_SUCCESS)
                 return -1;
-        if ((turtle_datum_direction(self->datum, latitude, longitude, 90.,
+        if ((turtle_datum_direction(self->datum, latitude, longitude, 0.,
             0., &self->base[0][0])) != TURTLE_RETURN_SUCCESS)
                 return -1;
-        if ((turtle_datum_direction(self->datum, latitude, longitude, 0.,
+        if ((turtle_datum_direction(self->datum, latitude, longitude, 270.,
             0., &self->base[1][0])) != TURTLE_RETURN_SUCCESS)
                 return -1;
         if ((turtle_datum_direction(self->datum, latitude, longitude, 0.,
@@ -187,8 +190,8 @@ static PyObject * topography_local_to_utm(
         return Py_BuildValue("ddd", x, y, altitude);
 }
 
-/* Convert a local direction to horizontal angular coordinates. */
-static PyObject * topography_local_to_horizontal(
+/* Convert a local direction to GRAND angular coordinates. */
+static PyObject * topography_local_to_angular(
     TopographyObject * self, PyObject * args)
 {
         /* Parse the arguments. */
@@ -211,12 +214,16 @@ static PyObject * topography_local_to_horizontal(
         double ecef[3] = { 0., 0., 0. };
         int i, j;
         for (i = 0; i < 3; i++) for (j = 0; j < 3; j++)
-                ecef[i] += self->base[j][i] * direction[j];
+                ecef[i] -= self->base[j][i] * direction[j];
         double azimuth = 0., elevation = 0.;
         if (turtle_datum_horizontal(self->datum, latitude, longitude,
             ecef, &azimuth, &elevation) != TURTLE_RETURN_SUCCESS)
                 return NULL;
-        return Py_BuildValue("dd", azimuth, elevation);
+
+        /* Convert to GRAND conventions and return. */
+        const double theta = 90. - elevation;
+        const double phi = -azimuth;
+        return Py_BuildValue("dd", theta, phi);
 }
 
 /* Convert a geodetic position to a cartesian one in local frame. */
@@ -267,14 +274,14 @@ static PyObject * topography_utm_to_local(
         return Py_BuildValue("(d,d,d)", local[0], local[1], local[2]);
 }
 
-/* Convert horizontal angular coordinates to a local direction. */
-static PyObject * topography_horizontal_to_local(
+/* Convert GRAND angular coordinates to a local direction. */
+static PyObject * topography_angular_to_local(
     TopographyObject * self, PyObject * args)
 {
         /* Parse the arguments. */
         PyObject * position_obj = NULL;
-        double azimuth, elevation;
-        if (!PyArg_ParseTuple(args, "Odd", &position_obj, &azimuth, &elevation))
+        double theta, phi;
+        if (!PyArg_ParseTuple(args, "Odd", &position_obj, &theta, &phi))
                 return NULL;
         double local[3];
         if (parse_vector(position_obj, 3, local) != 0)
@@ -287,13 +294,15 @@ static PyObject * topography_horizontal_to_local(
 
         /* Compute the local direction. */
         double ecef[3];
+        const double azimuth = -phi;
+        const double elevation = 90. - theta;
         if (turtle_datum_direction(self->datum, latitude, longitude, azimuth,
             elevation, ecef) != TURTLE_RETURN_SUCCESS)
                 return NULL;
         double direction[3] = { 0., 0., 0. };
         int i, j;
         for (i = 0; i < 3; i++) for (j = 0; j < 3; j++)
-                direction[i] += self->base[i][j] * ecef[j];
+                direction[i] -= self->base[i][j] * ecef[j];
 
         return Py_BuildValue(
             "(d,d,d)", direction[0], direction[1], direction[2]);
@@ -525,16 +534,14 @@ static PyMethodDef topography_methods[] = {
           "Convert a cartesian position in local frame to a geodetic one" },
         { "local_to_utm", (PyCFunction)topography_local_to_utm, METH_O,
           "Convert a cartesian position in local frame to UTM coordinates" },
-        { "local_to_horizontal", (PyCFunction)topography_local_to_horizontal,
-          METH_VARARGS, "Convert a local direction to horizontal angular "
-          "coordinates" },
+        { "local_to_angular", (PyCFunction)topography_local_to_angular,
+          METH_VARARGS, "Convert a local direction to angular coordinates" },
         { "lla_to_local", (PyCFunction)topography_lla_to_local, METH_VARARGS,
           "Convert a geodetic position to a cartesian one in local frame" },
         { "utm_to_local", (PyCFunction)topography_utm_to_local, METH_VARARGS,
           "Convert UTM coordinates to a cartesian position in local frame" },
-        { "horizontal_to_local", (PyCFunction)topography_horizontal_to_local,
-          METH_VARARGS, "Convert horizontal angular coordinates to a local "
-          "direction" },
+        { "angular_to_local", (PyCFunction)topography_angular_to_local,
+          METH_VARARGS, "Convert angular coordinates to a local direction" },
         { "ground_altitude", (PyCFunction)topography_ground_altitude,
           METH_KEYWORDS, "Get the ground altitude in local frame coordinates "
           "or in geodetic ones" },
