@@ -15,6 +15,7 @@ module = Extension("grand_tour",
                                                  "include")],
                     libraries = ["turtle"],
                     library_dirs = [lib_dir,],
+                    runtime_library_dirs = [lib_dir,],
                     sources = ["src/grand-tour.c"])
 
 setup(name = "grand_tour",
