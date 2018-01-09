@@ -214,7 +214,7 @@ static PyObject * topography_local_to_angular(
         double ecef[3] = { 0., 0., 0. };
         int i, j;
         for (i = 0; i < 3; i++) for (j = 0; j < 3; j++)
-                ecef[i] -= self->base[j][i] * direction[j];
+                ecef[i] += self->base[j][i] * direction[j];
         double azimuth = 0., elevation = 0.;
         if (turtle_datum_horizontal(self->datum, latitude, longitude,
             ecef, &azimuth, &elevation) != TURTLE_RETURN_SUCCESS)
@@ -302,7 +302,7 @@ static PyObject * topography_angular_to_local(
         double direction[3] = { 0., 0., 0. };
         int i, j;
         for (i = 0; i < 3; i++) for (j = 0; j < 3; j++)
-                direction[i] -= self->base[i][j] * ecef[j];
+                direction[i] += self->base[i][j] * ecef[j];
 
         return Py_BuildValue(
             "(d,d,d)", direction[0], direction[1], direction[2]);
