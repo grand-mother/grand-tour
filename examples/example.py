@@ -17,6 +17,15 @@ for i, yi in enumerate(y):
         z[i, j] = topo.ground_altitude(xj, yi)
 print "  --> Done in {:.1f}s".format(time.time() - t0)
 
+# Sample the local slope.
+t0 = time.time()
+print "o Sampling the slope vertical angle ..."
+slope = numpy.zeros((len(y), len(x)))
+for i, yi in enumerate(y):
+    for j, xj in enumerate(x):
+        slope[i, j] = topo.ground_normal(xj, yi, angles=True)[1]
+print "  --> Done in {:.1f}s".format(time.time() - t0)
+
 # Sample the geodetic altitude over a mesh in UTM coordinates.
 t0 = time.time()
 print "o Sampling the UTM altitude ..."
@@ -39,6 +48,13 @@ pylab.colorbar()
 pylab.xlabel("local x (km)")
 pylab.ylabel("local y (km)")
 pylab.title("local altitude (km)")
+
+pylab.figure()
+pylab.pcolor(x * 1E-03, y * 1E-03, slope, cmap=cmap, vmin=0., vmax=90.)
+pylab.colorbar()
+pylab.xlabel("local x (km)")
+pylab.ylabel("local y (km)")
+pylab.title("slope vertical angle (deg)")
 
 pylab.figure()
 pylab.pcolor(x * 1E-03, y * 1E-03, zUTM * 1E-03, **opts)
