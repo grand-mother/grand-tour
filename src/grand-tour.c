@@ -644,7 +644,7 @@ static PyObject * topography_ground_normal(
                 /* Compute the local verticale. */
                 if (!geodetic) {
                         double z;
-                        if (ground_elevation(self, x, y, &z) !=
+                        if (ground_elevation_local(self, x, y, &z) !=
                             TURTLE_RETURN_SUCCESS)
                                 return NULL;
 
@@ -653,7 +653,7 @@ static PyObject * topography_ground_normal(
                 }
 
                 double ecef[3];
-                if (turtle_datum_direction(self->datum, x, y, 0., 0., ecef) !=
+                if (turtle_datum_direction(self->datum, x, y, 0., 90., ecef) !=
                     TURTLE_RETURN_SUCCESS)
                         return NULL;
                 ecef_to_local(self, ecef, n, 1);
@@ -661,16 +661,16 @@ static PyObject * topography_ground_normal(
                 /* Estimate the local slope of the ground. */
                 if (geodetic) {
                         double z;
-                        if (ground_elevation_local(self, x, y, &z) !=
+                        if (ground_elevation(self, x, y, &z) !=
                             TURTLE_RETURN_SUCCESS)
                                 return NULL;
 
-                        double lla[3];
-                        if (lla_to_local(self, x, y, z, lla) !=
+                        double local[3];
+                        if (lla_to_local(self, x, y, z, local) !=
                             TURTLE_RETURN_SUCCESS)
                                 return NULL;
-                        x = lla[0];
-                        y = lla[1];
+                        x = local[0];
+                        y = local[1];
                 }
 
                 if (ground_normal_local(self, x, y, n) != TURTLE_RETURN_SUCCESS)
