@@ -151,14 +151,50 @@ static int parse_vector(PyObject * object, int n, double * vector)
         return 0;
 }
 
+/* Convert a local position/direction to an ECEF one. */
+static void local_to_ecef(
+    TopographyObject * self, const double * local, double * ecef, int vector)
+{
+        if (vector) {
+                ecef[0] = 0.;
+                ecef[1] = 0.;
+                ecef[2] = 0.;
+        } else {
+                ecef[0] = self->origin[0];
+                ecef[1] = self->origin[1];
+                ecef[2] = self->origin[2];
+        }
+        int i, j;
+        for (i = 0; i < 3; i++)
+                for (j = 0; j < 3; j++) ecef[i] += self->base[j][i] * local[j];
+}
+
+static PyObject * topography_local_to_ecef(
+        TopographyObject * self, PyObject * args, PyObject * kwargs)
+{
+        /* Parse the arguments. */
+        PyObject * local_obj = NULL;
+        int vector = 0;
+
+        static char * kwlist[] = { "local", "vector", NULL };
+        if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "O|b", kwlist, &local_obj, &vector))
+            return NULL;
+
+        double local[3];
+        if (parse_vector(local_obj, 3, local) != 0) return NULL;
+        double ecef[3];
+        local_to_ecef(self, local, ecef, vector);
+
+        return Py_BuildValue("(d,d,d)", ecef[0], ecef[1], ecef[2]);
+}
+
 /* Convert a cartesian position in local frame to a geodetic one. */
 static int local_to_lla(TopographyObject * self, double * local,
     double * latitude, double * longitude, double * altitude)
 {
-        double ecef[3] = { self->origin[0], self->origin[1], self->origin[2] };
-        int i, j;
-        for (i = 0; i < 3; i++)
-                for (j = 0; j < 3; j++) ecef[i] += self->base[j][i] * local[j];
+        double ecef[3];
+        local_to_ecef(self, local, ecef, 0);
         return turtle_datum_geodetic(
             self->datum, ecef, latitude, longitude, altitude);
 }
@@ -209,11 +245,8 @@ static PyObject * topography_local_to_angular(
                 return NULL;
 
         /* Compute the horizontal angular coordinates. */
-        double ecef[3] = { 0., 0., 0. };
-        int i, j;
-        for (i = 0; i < 3; i++)
-                for (j = 0; j < 3; j++)
-                        ecef[i] += self->base[j][i] * direction[j];
+        double ecef[3];
+        local_to_ecef(self, local, ecef, 1);
         double azimuth = 0., elevation = 0.;
         if (turtle_datum_horizontal(self->datum, latitude, longitude, ecef,
                 &azimuth, &elevation) != TURTLE_RETURN_SUCCESS)
@@ -225,6 +258,40 @@ static PyObject * topography_local_to_angular(
         return Py_BuildValue("dd", theta, phi);
 }
 
+/* Convert an ECEF position/direction to a local one. */
+static void ecef_to_local(
+    TopographyObject * self, const double * ecef, double * local, int vector)
+{
+        const double eps = vector ? 0. : 1.;
+        int i, j;
+        for (i = 0; i < 3; i++) {
+                local[i] = 0.;
+                for (j = 0; j < 3; j++)
+                        local[i] += self->base[i][j] * (ecef[j] -
+                            eps * self->origin[j]);
+        }
+}
+
+static PyObject * topography_ecef_to_local(
+        TopographyObject * self, PyObject * args, PyObject * kwargs)
+{
+        /* Parse the arguments. */
+        PyObject * ecef_obj = NULL;
+        int vector = 0;
+
+        static char * kwlist[] = { "ecef", "vector", NULL };
+        if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "O|b", kwlist, &ecef_obj, &vector))
+            return NULL;
+
+        double ecef[3];
+        if (parse_vector(ecef_obj, 3, ecef) != 0) return NULL;
+        double local[3];
+        ecef_to_local(self, ecef, local, vector);
+
+        return Py_BuildValue("(d,d,d)", local[0], local[1], local[2]);
+}
+
 /* Convert a geodetic position to a cartesian one in local frame. */
 static enum turtle_return lla_to_local(TopographyObject * self, double latitude,
     double longitude, double altitude, double * local)
@@ -234,13 +301,7 @@ static enum turtle_return lla_to_local(TopographyObject * self, double latitude,
         if ((rc = turtle_datum_ecef(self->datum, latitude, longitude, altitude,
                  ecef)) != TURTLE_RETURN_SUCCESS)
                 return rc;
-        int i, j;
-        for (i = 0; i < 3; i++) {
-                local[i] = 0.;
-                for (j = 0; j < 3; j++)
-                        local[i] +=
-                            self->base[i][j] * (ecef[j] - self->origin[j]);
-        }
+        ecef_to_local(self, ecef, local, 0);
         return TURTLE_RETURN_SUCCESS;
 }
 
@@ -296,11 +357,8 @@ static PyObject * topography_angular_to_local(
         if (turtle_datum_direction(self->datum, latitude, longitude, azimuth,
                 elevation, ecef) != TURTLE_RETURN_SUCCESS)
                 return NULL;
-        double direction[3] = { 0., 0., 0. };
-        int i, j;
-        for (i = 0; i < 3; i++)
-                for (j = 0; j < 3; j++)
-                        direction[i] += self->base[i][j] * ecef[j];
+        double direction[3];
+        ecef_to_local(self, ecef, direction, 1);
 
         return Py_BuildValue(
             "(d,d,d)", direction[0], direction[1], direction[2]);
@@ -598,10 +656,7 @@ static PyObject * topography_ground_normal(
                 if (turtle_datum_direction(self->datum, x, y, 0., 0., ecef) !=
                     TURTLE_RETURN_SUCCESS)
                         return NULL;
-                int i, j;
-                for (i = 0; i < 3; i++)
-                        for (j = 0; j < 3; j++)
-                                n[i] += self->base[i][j] * ecef[j];
+                ecef_to_local(self, ecef, n, 1);
         } else {
                 /* Estimate the local slope of the ground. */
                 if (geodetic) {
@@ -634,12 +689,16 @@ static PyObject * topography_ground_normal(
 
 /* Register the Topography methods. */
 static PyMethodDef topography_methods[] = {
+        { "local_to_ecef", (PyCFunction)topography_local_to_ecef, METH_VARARGS,
+            "Convert a cartesian position in local frame to an ECEF one" },
         { "local_to_lla", (PyCFunction)topography_local_to_lla, METH_O,
             "Convert a cartesian position in local frame to a geodetic one" },
         { "local_to_utm", (PyCFunction)topography_local_to_utm, METH_O,
             "Convert a cartesian position in local frame to UTM coordinates" },
         { "local_to_angular", (PyCFunction)topography_local_to_angular,
             METH_VARARGS, "Convert a local direction to angular coordinates" },
+        { "ecef_to_local", (PyCFunction)topography_ecef_to_local, METH_VARARGS,
+            "Convert a cartesian position in ECEF frame to a local one" },
         { "lla_to_local", (PyCFunction)topography_lla_to_local, METH_VARARGS,
             "Convert a geodetic position to a cartesian one in local frame" },
         { "utm_to_local", (PyCFunction)topography_utm_to_local, METH_VARARGS,
