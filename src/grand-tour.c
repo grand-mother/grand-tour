@@ -246,7 +246,7 @@ static PyObject * topography_local_to_angular(
 
         /* Compute the horizontal angular coordinates. */
         double ecef[3];
-        local_to_ecef(self, local, ecef, 1);
+        local_to_ecef(self, direction, ecef, 1);
         double azimuth = 0., elevation = 0.;
         if (turtle_datum_horizontal(self->datum, latitude, longitude, ecef,
                 &azimuth, &elevation) != TURTLE_RETURN_SUCCESS)
