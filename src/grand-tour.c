@@ -2,8 +2,8 @@
  * Copyright (C) 2017 Université Clermont Auvergne, CNRS/IN2P3, LPC
  * Author: Valentin NIESS (niess@in2p3.fr)
  *
- * This software is a Python C extension module providing topographic
- * utilities for GRAND. It relies on the TURTLE library.
+ * This software is a C99 library providing topographic utilities for GRAND. It
+ * relies on the TURTLE library.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -20,362 +20,238 @@
  */
 
 #include <float.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-#include "Python.h"
-#include "turtle.h"
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
-/* Python exception for TURTLE errors. */
-static PyObject * TurtleError = NULL;
+#include "grand-tour.h"
 
-/* Raise a Python exception whenever a TURTLE library error is triggered. */
-static void handle_turtle_error(enum turtle_return rc, turtle_caller_t * caller)
+int gt_initialise(struct gt_topography * topography, double latitude,
+    double longitude, const char * path, int stack_size,
+    turtle_handler_cb * handler, struct turtle_datum * datum)
 {
-        static char msg[256];
-        sprintf(msg, "%s [%s]", turtle_strfunc(caller), turtle_strerror(rc));
-        PyErr_SetString(TurtleError, msg);
-}
+        topography->latitude = latitude;
+        topography->longitude = longitude;
 
-/* The low level topography data. */
-typedef struct {
-        PyObject_HEAD
-            /* TURTLE handles. */
-            struct turtle_datum * datum;
-        struct turtle_projection * projection;
-        /* Flag to check for TURTLE's error handling. */
-        int catch;
-        /* Flag for a flat topography. */
-        int flat;
-        double flat_size;
-        /* Local frame parameters. */
-        double latitude;
-        double longitude;
-        double origin[3];
-        double base[3][3];
-} TopographyObject;
-
-/* Initialise a Topography object. */
-static int topography_init(
-    TopographyObject * self, PyObject * args, PyObject * kwargs)
-{
-        /* Parse the arguments. */
-        double latitude, longitude;
-        char * path;
-        int stack_size = 4;
-
-        static char * kwlist[] = { "latitude", "longitude", "path",
-                "stack_size", NULL };
-        if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dds|i", kwlist,
-                &latitude, &longitude, &path, &stack_size))
-                return -1;
-        self->catch = 0;
-        self->latitude = latitude;
-        self->longitude = longitude;
+        /* Copy the error handler. */
+        topography->catch = 0;
+        topography->handler = handler;
 
         /* Create the datum. */
-        if ((turtle_datum_create(path, stack_size, NULL, NULL, &self->datum)) !=
-            TURTLE_RETURN_SUCCESS)
-                return -1;
+        enum turtle_return rc;
+        if (datum != NULL) {
+                topography->datum = datum;
+        } else {
+                if ((rc = turtle_datum_create(path, stack_size, NULL, NULL,
+                         &topography->datum)) != TURTLE_RETURN_SUCCESS)
+                        return rc;
+        }
 
         /* Check for a flat topography and parse its size whenever provided. */
         if (strncmp(path, "flat", 4) == 0) {
-                self->flat = 1;
+                topography->flat = 1;
                 if (strlen(path) > 5) {
                         char * endptr;
-                        self->flat_size = 0.5 * strtod(path + 5, &endptr);
-                        if (*endptr != 0) {
-                                PyErr_SetString(PyExc_ValueError,
-                                    "invalid size for flat topography");
-                                return -1;
-                        }
+                        topography->flat_size = 0.5 * strtod(path + 5, &endptr);
+                        if (*endptr != 0) { return -1; }
                 } else {
-                        self->flat_size = 1.;
+                        topography->flat_size = 1.;
                 }
         } else {
-                self->flat = 0;
-                self->flat_size = 0.;
+                topography->flat = 0;
+                topography->flat_size = 0.;
         }
 
+#ifndef _GT_NO_UTM
         /* Create the UTM projection. */
         static char name[8];
         const int zone = ((int)((longitude + 180) / 6) % 60) + 1;
         const char hemisphere = (latitude >= 0.) ? 'N' : 'S';
         sprintf(name, "UTM %02d%c", zone, hemisphere);
-        if ((turtle_projection_create(name, &self->projection)) !=
+        if ((rc = turtle_projection_create(name, &topography->projection)) !=
             TURTLE_RETURN_SUCCESS)
-                return -1;
+                return rc;
+#else
+        topography->projection = NULL;
+#endif
 
         /*
          * Compute the local frame using GRAND conventions, i.e. x-axis goes
          * from South to North, y-axis goes from East to West.
          */
-        if ((turtle_datum_ecef(self->datum, latitude, longitude, 0.,
-                self->origin)) != TURTLE_RETURN_SUCCESS)
-                return -1;
-        if ((turtle_datum_direction(self->datum, latitude, longitude, 0., 0.,
-                &self->base[0][0])) != TURTLE_RETURN_SUCCESS)
-                return -1;
-        if ((turtle_datum_direction(self->datum, latitude, longitude, 270., 0.,
-                &self->base[1][0])) != TURTLE_RETURN_SUCCESS)
-                return -1;
-        if ((turtle_datum_direction(self->datum, latitude, longitude, 0., 90.,
-                &self->base[2][0])) != TURTLE_RETURN_SUCCESS)
-                return -1;
+        if ((rc = turtle_datum_ecef(topography->datum, latitude, longitude, 0.,
+                 topography->origin)) != TURTLE_RETURN_SUCCESS)
+                return rc;
+        if ((rc = turtle_datum_direction(topography->datum, latitude, longitude,
+                 0., 0., &topography->base[0][0])) != TURTLE_RETURN_SUCCESS)
+                return rc;
+        if ((rc = turtle_datum_direction(topography->datum, latitude, longitude,
+                 270., 0., &topography->base[1][0])) != TURTLE_RETURN_SUCCESS)
+                return rc;
+        if ((rc = turtle_datum_direction(topography->datum, latitude, longitude,
+                 0., 90., &topography->base[2][0])) != TURTLE_RETURN_SUCCESS)
+                return rc;
 
-        return 0;
+        return TURTLE_RETURN_SUCCESS;
 }
 
-/* Free a topography object. */
-static void topography_destroy(TopographyObject * self)
+/* Convert a local position / direction to an ECEF one. */
+void gt_to_ecef(const struct gt_topography * topography, const double * local,
+    int is_a_vector, double * ecef)
 {
-        turtle_datum_destroy(&self->datum);
-        turtle_projection_destroy(&self->projection);
-        Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-/* Utility function for parsing an arbitrary sequence as a vector. */
-static int parse_vector(PyObject * object, int n, double * vector)
-{
-        const int size = PySequence_Length(object);
-        if (size < n) return -1;
-        int i;
-        for (i = 0; i < n; i++) {
-                PyObject * value = PySequence_GetItem(object, i);
-                if (value == NULL) return -1;
-                PyObject * float_ = PyNumber_Float(value);
-                Py_DECREF(value);
-                if (float_ == NULL) return -1;
-                vector[i] = PyFloat_AsDouble(float_);
-                Py_DECREF(float_);
-                if (PyErr_Occurred() != NULL) return -1;
-        }
-        return 0;
-}
-
-/* Convert a local position/direction to an ECEF one. */
-static void local_to_ecef(
-    TopographyObject * self, const double * local, double * ecef, int vector)
-{
-        if (vector) {
+        if (is_a_vector) {
                 ecef[0] = 0.;
                 ecef[1] = 0.;
                 ecef[2] = 0.;
         } else {
-                ecef[0] = self->origin[0];
-                ecef[1] = self->origin[1];
-                ecef[2] = self->origin[2];
+                ecef[0] = topography->origin[0];
+                ecef[1] = topography->origin[1];
+                ecef[2] = topography->origin[2];
         }
         int i, j;
         for (i = 0; i < 3; i++)
-                for (j = 0; j < 3; j++) ecef[i] += self->base[j][i] * local[j];
-}
-
-static PyObject * topography_local_to_ecef(
-        TopographyObject * self, PyObject * args, PyObject * kwargs)
-{
-        /* Parse the arguments. */
-        PyObject * local_obj = NULL;
-        int vector = 0;
-
-        static char * kwlist[] = { "local", "vector", NULL };
-        if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "O|b", kwlist, &local_obj, &vector))
-            return NULL;
-
-        double local[3];
-        if (parse_vector(local_obj, 3, local) != 0) return NULL;
-        double ecef[3];
-        local_to_ecef(self, local, ecef, vector);
-
-        return Py_BuildValue("(d,d,d)", ecef[0], ecef[1], ecef[2]);
+                for (j = 0; j < 3; j++)
+                        ecef[i] += topography->base[j][i] * local[j];
 }
 
 /* Convert a cartesian position in local frame to a geodetic one. */
-static int local_to_lla(TopographyObject * self, double * local,
-    double * latitude, double * longitude, double * altitude)
+int gt_to_lla(
+    const struct gt_topography * topography, const double * local, double * lla)
 {
         double ecef[3];
-        local_to_ecef(self, local, ecef, 0);
+        gt_to_ecef(topography, local, 0, ecef);
         return turtle_datum_geodetic(
-            self->datum, ecef, latitude, longitude, altitude);
+            topography->datum, ecef, lla, lla + 1, lla + 2);
+
+        return TURTLE_RETURN_SUCCESS;
 }
 
-static PyObject * topography_local_to_lla(
-    TopographyObject * self, PyObject * position)
+#ifndef _GT_NO_UTM
+/* Convert a cartesian position in local frame to UTM coordinates */
+int gt_to_utm(
+    const struct gt_topography * topography, const double * local, double * utm)
 {
-        double local[3];
-        if (parse_vector(position, 3, local) != 0) return NULL;
-        double latitude = 0, longitude = 0, altitude = 0;
-        if (local_to_lla(self, local, &latitude, &longitude, &altitude) != 0)
-                return NULL;
-        return Py_BuildValue("ddd", latitude, longitude, altitude);
+        double lla[3] = { 0., 0., 0. };
+        int rc;
+        if ((rc = gt_to_lla(topography, local, lla)) != TURTLE_RETURN_SUCCESS)
+                return rc;
+        utm[2] = lla[2];
+
+        return turtle_projection_project(
+            topography->projection, lla[0], lla[1], utm, utm + 1);
 }
+#endif
 
-/* Convert a cartesian position in local frame to UTM coordinates. */
-static PyObject * topography_local_to_utm(
-    TopographyObject * self, PyObject * position)
+/* Convert a local direction to angular coordinates */
+int gt_to_angular(const struct gt_topography * topography,
+    const double * position, const double * direction, double * angular)
 {
-        double local[3];
-        if (parse_vector(position, 3, local) != 0) return NULL;
-        double latitude = 0., longitude = 0., altitude = 0.;
-        if (local_to_lla(self, local, &latitude, &longitude, &altitude) != 0)
-                return NULL;
-        double x = 0., y = 0.;
-        if (turtle_projection_project(self->projection, latitude, longitude, &x,
-                &y) != TURTLE_RETURN_SUCCESS)
-                return NULL;
-        return Py_BuildValue("ddd", x, y, altitude);
-}
-
-/* Convert a local direction to GRAND angular coordinates. */
-static PyObject * topography_local_to_angular(
-    TopographyObject * self, PyObject * args)
-{
-        /* Parse the arguments. */
-        PyObject *position_obj = NULL, *direction_obj = NULL;
-        if (!PyArg_ParseTuple(args, "OO", &position_obj, &direction_obj))
-                return NULL;
-        double local[3];
-        if (parse_vector(position_obj, 3, local) != 0) return NULL;
-        double direction[3];
-        if (parse_vector(direction_obj, 3, direction) != 0) return NULL;
-
         /* Compute the geodetic coordinates. */
-        double latitude = 0., longitude = 0., altitude = 0.;
-        if (local_to_lla(self, local, &latitude, &longitude, &altitude) != 0)
-                return NULL;
+        int rc;
+        double lla[3] = { 0., 0., 0. };
+        if ((rc = gt_to_lla(topography, position, lla)) !=
+            TURTLE_RETURN_SUCCESS)
+                return rc;
 
         /* Compute the horizontal angular coordinates. */
         double ecef[3];
-        local_to_ecef(self, direction, ecef, 1);
+        gt_to_ecef(topography, direction, 1, ecef);
         double azimuth = 0., elevation = 0.;
-        if (turtle_datum_horizontal(self->datum, latitude, longitude, ecef,
-                &azimuth, &elevation) != TURTLE_RETURN_SUCCESS)
-                return NULL;
+        if ((rc = turtle_datum_horizontal(topography->datum, lla[0], lla[1],
+                 ecef, &azimuth, &elevation)) != TURTLE_RETURN_SUCCESS)
+                return rc;
 
         /* Convert to GRAND conventions and return. */
-        const double theta = 90. - elevation;
-        const double phi = -azimuth;
-        return Py_BuildValue("dd", theta, phi);
+        angular[0] = 90. - elevation;
+        angular[1] = -azimuth;
+
+        return TURTLE_RETURN_SUCCESS;
 }
 
 /* Convert an ECEF position/direction to a local one. */
-static void ecef_to_local(
-    TopographyObject * self, const double * ecef, double * local, int vector)
+void gt_from_ecef(const struct gt_topography * topography, const double * ecef,
+    int is_a_vector, double * local)
 {
-        const double eps = vector ? 0. : 1.;
+        const double eps = is_a_vector ? 0. : 1.;
         int i, j;
         for (i = 0; i < 3; i++) {
                 local[i] = 0.;
                 for (j = 0; j < 3; j++)
-                        local[i] += self->base[i][j] * (ecef[j] -
-                            eps * self->origin[j]);
+                        local[i] += topography->base[i][j] *
+                            (ecef[j] - eps * topography->origin[j]);
         }
 }
 
-static PyObject * topography_ecef_to_local(
-        TopographyObject * self, PyObject * args, PyObject * kwargs)
-{
-        /* Parse the arguments. */
-        PyObject * ecef_obj = NULL;
-        int vector = 0;
-
-        static char * kwlist[] = { "ecef", "vector", NULL };
-        if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "O|b", kwlist, &ecef_obj, &vector))
-            return NULL;
-
-        double ecef[3];
-        if (parse_vector(ecef_obj, 3, ecef) != 0) return NULL;
-        double local[3];
-        ecef_to_local(self, ecef, local, vector);
-
-        return Py_BuildValue("(d,d,d)", local[0], local[1], local[2]);
-}
-
-/* Convert a geodetic position to a cartesian one in local frame. */
-static enum turtle_return lla_to_local(TopographyObject * self, double latitude,
-    double longitude, double altitude, double * local)
+/* Convert a geodetic position to a cartesian one in local frame */
+int gt_from_lla(
+    const struct gt_topography * topography, const double * lla, double * local)
 {
         enum turtle_return rc;
         double ecef[3];
-        if ((rc = turtle_datum_ecef(self->datum, latitude, longitude, altitude,
+        if ((rc = turtle_datum_ecef(topography->datum, lla[0], lla[1], lla[2],
                  ecef)) != TURTLE_RETURN_SUCCESS)
                 return rc;
-        ecef_to_local(self, ecef, local, 0);
+        gt_from_ecef(topography, ecef, 0, local);
         return TURTLE_RETURN_SUCCESS;
 }
 
-static PyObject * topography_lla_to_local(
-    TopographyObject * self, PyObject * args)
+#ifndef _GT_NO_UTM
+/* Convert UTM coordinates to a cartesian position in local frame */
+int gt_from_utm(
+    const struct gt_topography * topography, const double * utm, double * local)
 {
-        double latitude, longitude, altitude;
-        if (!PyArg_ParseTuple(args, "ddd", &latitude, &longitude, &altitude))
-                return NULL;
-        double local[3] = { 0., 0., 0. };
-        if (lla_to_local(self, latitude, longitude, altitude, local) != 0)
-                return NULL;
-        return Py_BuildValue("(d,d,d)", local[0], local[1], local[2]);
+        double lla[3] = { 0., 0., utm[2] };
+        int rc;
+        if ((rc = turtle_projection_unproject(topography->projection, utm[0],
+                 utm[1], lla, lla + 1)) != TURTLE_RETURN_SUCCESS)
+                return rc;
+        return gt_from_lla(topography, lla, local);
 }
+#endif
 
-/* Convert UTM coordinates to a cartesian position in local frame. */
-static PyObject * topography_utm_to_local(
-    TopographyObject * self, PyObject * args)
+/* Convert angular coordinates to a local direction */
+int gt_from_angular(const struct gt_topography * topography,
+    const double * position, const double * angular, double * direction)
 {
-        double x, y, altitude;
-        if (!PyArg_ParseTuple(args, "ddd", &x, &y, &altitude)) return NULL;
-        double latitude = 0., longitude = 0.;
-        if (turtle_projection_unproject(self->projection, x, y, &latitude,
-                &longitude) != TURTLE_RETURN_SUCCESS)
-                return NULL;
-        double local[3] = { 0., 0., 0. };
-        if (lla_to_local(self, latitude, longitude, altitude, local) != 0)
-                return NULL;
-        return Py_BuildValue("(d,d,d)", local[0], local[1], local[2]);
-}
-
-/* Convert GRAND angular coordinates to a local direction. */
-static PyObject * topography_angular_to_local(
-    TopographyObject * self, PyObject * args)
-{
-        /* Parse the arguments. */
-        PyObject * position_obj = NULL;
-        double theta, phi;
-        if (!PyArg_ParseTuple(args, "Odd", &position_obj, &theta, &phi))
-                return NULL;
-        double local[3];
-        if (parse_vector(position_obj, 3, local) != 0) return NULL;
-
         /* Compute the geodetic coordinates. */
-        double latitude = 0., longitude = 0., altitude = 0.;
-        if (local_to_lla(self, local, &latitude, &longitude, &altitude) != 0)
-                return NULL;
+        int rc;
+        double lla[3] = { 0., 0., 0. };
+        if ((rc = gt_to_lla(topography, position, lla)) !=
+            TURTLE_RETURN_SUCCESS)
+                return rc;
 
         /* Compute the local direction. */
         double ecef[3];
-        const double azimuth = -phi;
-        const double elevation = 90. - theta;
-        if (turtle_datum_direction(self->datum, latitude, longitude, azimuth,
-                elevation, ecef) != TURTLE_RETURN_SUCCESS)
-                return NULL;
-        double direction[3];
-        ecef_to_local(self, ecef, direction, 1);
+        const double azimuth = -angular[1];
+        const double elevation = 90. - angular[0];
+        if ((rc = turtle_datum_direction(topography->datum, lla[0], lla[1],
+                 azimuth, elevation, ecef)) != TURTLE_RETURN_SUCCESS)
+                return rc;
+        gt_from_ecef(topography, ecef, 1, direction);
 
-        return Py_BuildValue(
-            "(d,d,d)", direction[0], direction[1], direction[2]);
+        return TURTLE_RETURN_SUCCESS;
 }
 
 /* Encapsulate TURTLE calls to elevation in order to check for a flat
  * topography.
  */
 static enum turtle_return ground_elevation(
-    TopographyObject * self, double latitude, double longitude, double * z)
+    const struct gt_topography * topography, double latitude, double longitude,
+    double * z)
 {
-        if (self->flat) {
+        if (topography->flat) {
                 *z = 0.;
-                if ((fabs(latitude - self->latitude) > self->flat_size) ||
-                    (fabs(longitude - self->longitude) > self->flat_size)) {
-                        if (!self->catch)
-                                handle_turtle_error(TURTLE_RETURN_PATH_ERROR,
+                if ((fabs(latitude - topography->latitude) >
+                        topography->flat_size) ||
+                    (fabs(longitude - topography->longitude) >
+                        topography->flat_size)) {
+                        if (!topography->catch)
+                                topography->handler(TURTLE_RETURN_PATH_ERROR,
                                     (turtle_caller_t *)turtle_datum_elevation);
                         return TURTLE_RETURN_PATH_ERROR;
                 } else {
@@ -383,13 +259,13 @@ static enum turtle_return ground_elevation(
                 }
         } else {
                 return turtle_datum_elevation(
-                    self->datum, latitude, longitude, z);
+                    topography->datum, latitude, longitude, z);
         }
 }
 
 /* Estimate the ground elevation in the local frame. */
 static enum turtle_return ground_elevation_local(
-    TopographyObject * self, double x, double y, double * zg)
+    const struct gt_topography * topography, double x, double y, double * zg)
 {
         /* Let us compute the altitude in local coordinates using an iterative
          * method. We need to find the ground position that projects at (x, y).
@@ -401,17 +277,16 @@ static enum turtle_return ground_elevation_local(
         for (_ = 0; _ < 5; _++) {
                 /* Get the ground altitude for the current guess. */
                 enum turtle_return rc;
-                double latitude, longitude, altitude;
-                if ((rc = local_to_lla(self, local, &latitude, &longitude,
-                         &altitude)) != TURTLE_RETURN_SUCCESS)
-                        return rc;
-                double z;
-                if ((rc = ground_elevation(self, latitude, longitude, &z)) !=
+                double lla[3] = { 0., 0., 0. };
+                if ((rc = gt_to_lla(topography, local, lla)) !=
                     TURTLE_RETURN_SUCCESS)
+                        return rc;
+                if ((rc = ground_elevation(topography, lla[0], lla[1],
+                         lla + 2)) != TURTLE_RETURN_SUCCESS)
                         return rc;
 
                 /* Compute the corresponding local coordinates. */
-                if ((rc = lla_to_local(self, latitude, longitude, z, new)) !=
+                if ((rc = gt_from_lla(topography, lla, new)) !=
                     TURTLE_RETURN_SUCCESS)
                         return rc;
 
@@ -427,115 +302,76 @@ static enum turtle_return ground_elevation_local(
         return TURTLE_RETURN_SUCCESS;
 }
 
-/* Get the ground altitude in local frame coordinates or in geodetic ones. */
-static PyObject * topography_ground_altitude(
-    TopographyObject * self, PyObject * args, PyObject * kwargs)
+/* Get the ground altitude in local frame coordinates or in geodetic ones */
+int gt_ground_altitude(const struct gt_topography * topography,
+    const double * position, int geodetic, double * altitude)
 {
-        /* Parse the arguments. */
-        double x, y;
-        int geodetic = 0;
-
-        static char * kwlist[] = { "x", "y", "geodetic", NULL };
-        if (!PyArg_ParseTupleAndKeywords(
-                args, kwargs, "dd|b", kwlist, &x, &y, &geodetic))
-                return NULL;
-
-        double z;
         if (geodetic) {
-                if (ground_elevation(self, x, y, &z) != TURTLE_RETURN_SUCCESS)
-                        return NULL;
+                return ground_elevation(
+                    topography, position[0], position[1], altitude);
         } else {
-                if (ground_elevation_local(self, x, y, &z) !=
-                    TURTLE_RETURN_SUCCESS)
-                        return NULL;
+                return ground_elevation_local(
+                    topography, position[0], position[1], altitude);
         }
-
-        return Py_BuildValue("d", z);
 }
 
 /* Compute the vertical distance to the ground. */
 static enum turtle_return vertical_distance(
-    TopographyObject * self, double * local, double * distance)
+    const struct gt_topography * topography, const double * local,
+    double * distance)
 {
         enum turtle_return rc;
-        double latitude, longitude, altitude;
-        if ((rc = local_to_lla(self, local, &latitude, &longitude,
-                 &altitude)) != TURTLE_RETURN_SUCCESS)
+        double lla[3];
+        if ((rc = gt_to_lla(topography, local, lla)) != TURTLE_RETURN_SUCCESS)
                 return rc;
         double z;
-        if ((rc = ground_elevation(self, latitude, longitude, &z)) !=
+        if ((rc = ground_elevation(topography, lla[0], lla[1], &z)) !=
             TURTLE_RETURN_SUCCESS)
                 return rc;
 
-        *distance = altitude - z;
+        *distance = lla[2] - z;
         return TURTLE_RETURN_SUCCESS;
 }
 
-/* Check if the given local position is above the ground. */
-static enum turtle_return is_above(
-    TopographyObject * self, double * local, int * status)
+/* Check if the given local position is above the ground */
+int gt_ground_above(const struct gt_topography * topography,
+    const double * position, int * status)
 {
-        enum turtle_return rc;
+        int rc;
         double distance;
-        if ((rc = vertical_distance(self, local, &distance)) !=
+        if ((rc = vertical_distance(topography, position, &distance)) !=
             TURTLE_RETURN_SUCCESS)
                 return rc;
         *status = (distance > 0.);
         return TURTLE_RETURN_SUCCESS;
 }
 
-static PyObject * topography_is_above(
-    TopographyObject * self, PyObject * position)
+/* Compute the distance to the topography for the given point, or segment */
+int gt_ground_distance(struct gt_topography * topography,
+    const double * position, const double * direction, double limit,
+    double * distance_ptr)
 {
-        double local[3];
-        if (parse_vector(position, 3, local) != 0) return NULL;
-        int status;
-        if (is_above(self, local, &status) != 0) return NULL;
-        return Py_BuildValue("b", status);
-}
-
-/* Compute the distance to the topography for the given point, or segment. */
-static PyObject * topography_distance(
-    TopographyObject * self, PyObject * args, PyObject * kwargs)
-{
-        /* Parse the arguments. */
-        PyObject *position_obj, *direction_obj = NULL;
-        double limit = -1.;
-
-        static char * kwlist[] = { "position", "direction", "limit", NULL };
-        if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|Od", kwlist,
-                &position_obj, &direction_obj, &limit))
-                return NULL;
-
-        double position[3];
-        if (parse_vector(position_obj, 3, position) != 0) return NULL;
-
-        if (direction_obj == NULL) {
-                /* Let us return the vertical distance to the ground. */
-                double distance;
-                if (vertical_distance(self, position, &distance) !=
-                    TURTLE_RETURN_SUCCESS)
-                        return NULL;
-                return Py_BuildValue("d", distance);
+        if (direction == NULL) {
+                /* This is a point. Let us return the vertical distance. */
+                return vertical_distance(topography, position, distance_ptr);
         }
 
         /* Let us step along the given direction until the ground is
          * reached.
          */
-        double direction[3];
-        if (parse_vector(direction_obj, 3, direction) != 0) return NULL;
-
         const double resolution = 1E-02;
-        int above;
-        if (is_above(self, position, &above) != TURTLE_RETURN_SUCCESS)
-                return NULL;
+        int rc, above;
+        if ((rc = gt_ground_above(topography, position, &above)) !=
+            TURTLE_RETURN_SUCCESS)
+                return rc;
         double r0[3] = { position[0], position[1], position[2] };
         double distance = 0.;
         turtle_handler(NULL);
-        self->catch = 1;
+        topography->catch = 1;
         for (;;) {
                 double step;
-                if (vertical_distance(self, r0, &step) != TURTLE_RETURN_SUCCESS)
+                if (vertical_distance(topography, r0, &step) !=
+                    TURTLE_RETURN_SUCCESS)
                         break;
                 step = 0.5 * fabs(step);
                 if (step < resolution) step = resolution;
@@ -543,7 +379,9 @@ static PyObject * topography_distance(
                         r0[1] + step * direction[1],
                         r0[2] + step * direction[2] };
                 int above1;
-                if (is_above(self, r1, &above1) != TURTLE_RETURN_SUCCESS) break;
+                if (gt_ground_above(topography, r1, &above1) !=
+                    TURTLE_RETURN_SUCCESS)
+                        break;
                 if (above1 != above) {
                         /* A medium change was found. Let us refine it with a
                          * binary search.
@@ -553,7 +391,7 @@ static PyObject * topography_distance(
                                         0.5 * (r0[1] + r1[1]),
                                         0.5 * (r0[2] + r1[2]) };
                                 int above2 = 0;
-                                is_above(self, r2, &above2);
+                                gt_ground_above(topography, r2, &above2);
                                 if (above2 == above)
                                         memcpy(r0, r2, sizeof(r0));
                                 else
@@ -569,9 +407,10 @@ static PyObject * topography_distance(
                         distance = (distance > 0.) ? sqrt(distance) : 0.;
                         if ((limit > 0.) && (distance > limit)) break;
                         if (!above) distance = -distance;
-                        turtle_handler(&handle_turtle_error);
-                        self->catch = 0;
-                        return Py_BuildValue("d", distance);
+                        turtle_handler(topography->handler);
+                        topography->catch = 0;
+                        *distance_ptr = distance;
+                        return TURTLE_RETURN_SUCCESS;
                 } else if (fabs(r1[2] > 1E+04))
                         break;
                 if (limit > 0.) {
@@ -581,14 +420,15 @@ static PyObject * topography_distance(
                 memcpy(r0, r1, sizeof(r0));
         }
 
-        turtle_handler(&handle_turtle_error);
-        self->catch = 0;
-        Py_RETURN_NONE;
+        turtle_handler(topography->handler);
+        topography->catch = 0;
+        *distance_ptr = -1.;
+        return TURTLE_RETURN_SUCCESS;
 }
 
-/* Compute the ground normal in local frame coordinates. */
-static enum turtle_return ground_normal_local(
-    TopographyObject * self, double x, double y, double * n)
+/* Get the normal to the ground in local frame coordinates */
+static int ground_normal_local(const struct gt_topography * topography,
+    const double * position, double * normal)
 {
         /* Estimate the local slope using an adaptation of S. Le Coz's
          * algorithm.
@@ -596,158 +436,86 @@ static enum turtle_return ground_normal_local(
         enum turtle_return rc;
         const double ds = 10.;
         double zx0, zx1, zy0, zy1;
-        if ((rc = ground_elevation_local(self, x - 0.5 * ds, y, &zx0)) !=
-            TURTLE_RETURN_SUCCESS)
+        if ((rc = ground_elevation_local(topography, position[0] - 0.5 * ds,
+                 position[1], &zx0)) != TURTLE_RETURN_SUCCESS)
                 return rc;
-        if ((rc = ground_elevation_local(self, x + 0.5 * ds, y, &zx1)) !=
-            TURTLE_RETURN_SUCCESS)
+        if ((rc = ground_elevation_local(topography, position[0] + 0.5 * ds,
+                 position[1], &zx1)) != TURTLE_RETURN_SUCCESS)
                 return rc;
-        if ((rc = ground_elevation_local(self, x, y - 0.5 * ds, &zy0)) !=
-            TURTLE_RETURN_SUCCESS)
+        if ((rc = ground_elevation_local(topography, position[0],
+                 position[1] - 0.5 * ds, &zy0)) != TURTLE_RETURN_SUCCESS)
                 return rc;
-        if ((rc = ground_elevation_local(self, x, y + 0.5 * ds, &zy1)) !=
-            TURTLE_RETURN_SUCCESS)
+        if ((rc = ground_elevation_local(topography, position[0],
+                 position[1] + 0.5 * ds, &zy1)) != TURTLE_RETURN_SUCCESS)
                 return rc;
 
         double u[3] = { ds, 0., zx1 - zx0 };
         double v[3] = { 0., ds, zy1 - zy0 };
-        n[0] = u[1] * v[2] - u[2] * v[1];
-        n[1] = u[2] * v[0] - u[0] * v[2];
-        n[2] = u[0] * v[1] - u[1] * v[0];
-        double d = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+        normal[0] = u[1] * v[2] - u[2] * v[1];
+        normal[1] = u[2] * v[0] - u[0] * v[2];
+        normal[2] = u[0] * v[1] - u[1] * v[0];
+        double d = normal[0] * normal[0] + normal[1] * normal[1] +
+            normal[2] * normal[2];
         if (d <= FLT_EPSILON)
                 d = 0.;
         else
                 d = 1. / sqrt(d);
-        n[0] *= d;
-        n[1] *= d;
-        n[2] *= d;
+        normal[0] *= d;
+        normal[1] *= d;
+        normal[2] *= d;
 
         return TURTLE_RETURN_SUCCESS;
 }
 
-/* Compute the normal to the ground, and optionnaly the corresponding angles. */
-static PyObject * topography_ground_normal(
-    TopographyObject * self, PyObject * args, PyObject * kwargs)
+/* Get the normal to the ground in local or geodetic coordinates */
+int gt_ground_normal(const struct gt_topography * topography,
+    const double * position, int geodetic, double * normal, double * angles)
 {
-        /* Parse the arguments. */
-        double x, y;
-        int geodetic = 0, angles = 0;
-
-        static char * kwlist[] = { "x", "y", "geodetic", "angles", NULL };
-        if (!PyArg_ParseTupleAndKeywords(
-                args, kwargs, "dd|bb", kwlist, &x, &y, &geodetic, &angles))
-                return NULL;
-
-        double n[3] = { 0., 0., 0. };
-        if (self->flat) {
+        int rc;
+        double tmp[3];
+        if (topography->flat) {
                 /* Compute the local verticale. */
                 if (!geodetic) {
                         double z;
-                        if (ground_elevation_local(self, x, y, &z) !=
+                        if ((rc = ground_elevation_local(
+                                 topography, position[0], position[1], &z)) !=
                             TURTLE_RETURN_SUCCESS)
-                                return NULL;
+                                return rc;
 
-                        double local[3] = { x, y, z }, tmp;
-                        local_to_lla(self, local, &x, &y, &tmp);
+                        double local[3] = { position[0], position[1], z };
+                        gt_to_lla(topography, local, tmp);
+                        position = tmp;
                 }
 
                 double ecef[3];
-                if (turtle_datum_direction(self->datum, x, y, 0., 90., ecef) !=
-                    TURTLE_RETURN_SUCCESS)
-                        return NULL;
-                ecef_to_local(self, ecef, n, 1);
+                if ((rc = turtle_datum_direction(topography->datum, position[0],
+                         position[1], 0., 90., ecef)) != TURTLE_RETURN_SUCCESS)
+                        return rc;
+                gt_from_ecef(topography, ecef, 1, normal);
         } else {
                 /* Estimate the local slope of the ground. */
                 if (geodetic) {
                         double z;
-                        if (ground_elevation(self, x, y, &z) !=
-                            TURTLE_RETURN_SUCCESS)
-                                return NULL;
+                        if ((rc = ground_elevation(topography, position[0],
+                                 position[1], &z)) != TURTLE_RETURN_SUCCESS)
+                                return rc;
 
-                        double local[3];
-                        if (lla_to_local(self, x, y, z, local) !=
+                        double lla[3] = { position[0], position[1], z };
+                        if ((rc = gt_from_lla(topography, lla, tmp)) !=
                             TURTLE_RETURN_SUCCESS)
-                                return NULL;
-                        x = local[0];
-                        y = local[1];
+                                return rc;
+                        position = tmp;
                 }
 
-                if (ground_normal_local(self, x, y, n) != TURTLE_RETURN_SUCCESS)
-                        return NULL;
+                if ((rc = ground_normal_local(topography, position, normal)) !=
+                    TURTLE_RETURN_SUCCESS)
+                        return rc;
         }
 
-        if (angles) {
-                const double phi = atan2(n[1], n[0]) * 180. / M_PI;
-                const double theta = acos(n[2]) * 180. / M_PI;
-                return Py_BuildValue(
-                    "(d, d, d), d, d", n[0], n[1], n[2], theta, phi);
-        } else {
-                return Py_BuildValue("(d, d, d)", n[0], n[1], n[2]);
+        if (angles != NULL) {
+                angles[1] = atan2(normal[1], normal[0]) * 180. / M_PI;
+                angles[0] = acos(normal[2]) * 180. / M_PI;
         }
-}
 
-/* Register the Topography methods. */
-static PyMethodDef topography_methods[] = {
-        { "local_to_ecef", (PyCFunction)topography_local_to_ecef, METH_VARARGS,
-            "Convert a cartesian position in local frame to an ECEF one" },
-        { "local_to_lla", (PyCFunction)topography_local_to_lla, METH_O,
-            "Convert a cartesian position in local frame to a geodetic one" },
-        { "local_to_utm", (PyCFunction)topography_local_to_utm, METH_O,
-            "Convert a cartesian position in local frame to UTM coordinates" },
-        { "local_to_angular", (PyCFunction)topography_local_to_angular,
-            METH_VARARGS, "Convert a local direction to angular coordinates" },
-        { "ecef_to_local", (PyCFunction)topography_ecef_to_local, METH_VARARGS,
-            "Convert a cartesian position in ECEF frame to a local one" },
-        { "lla_to_local", (PyCFunction)topography_lla_to_local, METH_VARARGS,
-            "Convert a geodetic position to a cartesian one in local frame" },
-        { "utm_to_local", (PyCFunction)topography_utm_to_local, METH_VARARGS,
-            "Convert UTM coordinates to a cartesian position in local frame" },
-        { "angular_to_local", (PyCFunction)topography_angular_to_local,
-            METH_VARARGS, "Convert angular coordinates to a local direction" },
-        { "ground_altitude", (PyCFunction)topography_ground_altitude,
-            METH_KEYWORDS,
-            "Get the ground altitude in local frame coordinates "
-            "or in geodetic ones" },
-        { "ground_normal", (PyCFunction)topography_ground_normal, METH_KEYWORDS,
-            "Get the normal to the ground in local frame coordinates." },
-        { "is_above", (PyCFunction)topography_is_above, METH_O,
-            "Check if the given local position is above the ground" },
-        { "distance", (PyCFunction)topography_distance, METH_KEYWORDS,
-            "Compute the distance to the topography for the given point, "
-            "or segment" },
-        { NULL }
-};
-
-/* The topography type. */
-static PyTypeObject TopographyType = { PyVarObject_HEAD_INIT(
-                                           NULL, 0) "grand_tour.Topography",
-        sizeof(TopographyObject), .tp_flags = Py_TPFLAGS_DEFAULT,
-        .tp_doc = "Topography provider in a cartesian local frame",
-        .tp_init = (initproc)topography_init,
-        .tp_dealloc = (destructor)topography_destroy,
-        .tp_methods = topography_methods };
-
-/* Initialise the module. */
-PyMODINIT_FUNC initgrand_tour(void)
-{
-        /* Initialise the Topography type. */
-        TopographyType.tp_new = PyType_GenericNew;
-        if (PyType_Ready(&TopographyType) < 0) return;
-
-        /* Initialise the module. */
-        PyObject * module;
-        if ((module = Py_InitModule("grand_tour", NULL)) == NULL) return;
-
-        /* Register the topography type. */
-        Py_INCREF(&TopographyType);
-        PyModule_AddObject(module, "Topography", (PyObject *)&TopographyType);
-
-        /* Register the TurtleError exception. */
-        TurtleError = PyErr_NewException("grand_tour.TurtleError", NULL, NULL);
-        Py_INCREF(TurtleError);
-        PyModule_AddObject(module, "TurtleError", TurtleError);
-
-        /* Initialise the turtle library. */
-        turtle_initialise(&handle_turtle_error);
+        return TURTLE_RETURN_SUCCESS;
 }

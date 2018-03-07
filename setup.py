@@ -12,11 +12,11 @@ else: lib_dir = "deps/turtle/lib"
 # Configure the extension module.
 module = Extension("grand_tour",
                     include_dirs = [os.path.join(deps_dir, "turtle",
-                                                 "include")],
+                                                 "include"), "include"],
                     libraries = ["turtle"],
                     library_dirs = [lib_dir,],
                     runtime_library_dirs = [lib_dir,],
-                    sources = ["src/grand-tour.c"])
+                    sources = ["src/grand-tour.c", "src/pygt.c"])
 
 setup(name = "grand_tour",
       version = "1.0",

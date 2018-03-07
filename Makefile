@@ -16,4 +16,4 @@ deps: $(LIB_DIR)/libturtle.so
 
 $(LIB_DIR)/libturtle.so: deps/turtle
 	@git submodule update --init --recursive
-	@$(MAKE) -C deps/turtle
+	@$(MAKE) -C deps/turtle TURTLE_USE_PNG=0

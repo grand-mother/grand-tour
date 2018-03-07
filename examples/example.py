@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+import sys
+sys.path.append("lib")
+
 import time
 from grand_tour import Topography
 import numpy

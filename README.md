@@ -3,23 +3,26 @@
 
 ## Description
 
-GRAND-TOUR is a Python C-extension module providing topographic utilities for
-GRAND. It is built over the [TURTLE][TURTLE] library.
+GRAND-TOUR is an extension of the [TURTLE][TURTLE] library providing topographic
+utilities for GRAND. It can be built as a Python C-extension module or directly
+embedded in a C99 project.
 
 [TURTLE]: https://github.com/niess/turtle
 
 ## Installation
 
 GRAND-TOUR is built automatically as a component of
-[RETRO](https://github.com/grand-mother/retro). For a standalone Installation
-you can run the following:
+[RETRO](https://github.com/grand-mother/retro). For a standalone Python
+installation you can run the following:
 ```bash
 make deps && make
-. setup.sh
 ```
 
 **Note** that you'll need ASTER-GDME2 tiles downloaded to `share/topography`
 for the [example](examples/example.py) to work.
+
+The C API is defined in [include/grand-tour.h](include/grand-tour.h). The source
+code is in [src/grand-tour.c](src/grand-tour.c).
 
 ## License
 

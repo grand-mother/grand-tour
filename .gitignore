@@ -1,5 +1,8 @@
 # Ignore binaries.
 lib
 
+# Ignore temporary builds
+build
+
 # Ignore topographic data.
 share/topography
