@@ -250,7 +250,7 @@ static enum turtle_return ground_elevation(
                         topography->flat_size) ||
                     (fabs(longitude - topography->longitude) >
                         topography->flat_size)) {
-                        if (!topography->catch)
+                        if (!topography->catch && (topography->handler != NULL))
                                 topography->handler(TURTLE_RETURN_PATH_ERROR,
                                     (turtle_caller_t *)turtle_datum_elevation);
                         return TURTLE_RETURN_PATH_ERROR;
