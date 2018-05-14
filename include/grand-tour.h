@@ -43,8 +43,8 @@ int gt_to_utm(const struct gt_topography * topography, const double * local,
 #endif
 
 /* Convert a local direction to angular coordinates */
-int gt_to_angular(const struct gt_topography * topography, const double * position,
-    const double * direction, double * angular);
+int gt_to_angular(const struct gt_topography * topography,
+    const double * position, const double * direction, double * angular);
 
 /* Convert a cartesian position in ECEF frame to a local one */
 void gt_from_ecef(const struct gt_topography * topography, const double * ecef,
@@ -69,15 +69,17 @@ int gt_ground_altitude(const struct gt_topography * topography,
     const double * position, int geodetic, double * altitude);
 
 /* Compute the distance to the topography for the given point, or segment */
-int gt_ground_distance(struct gt_topography * topography, const double * position,
-    const double * direction, double limit, double * distance);
+int gt_ground_distance(struct gt_topography * topography,
+    const double * position, const double * direction, double limit,
+    double * distance);
 
 /* Get the normal to the ground in local or geodetic coordinates */
 int gt_ground_normal(const struct gt_topography * topography,
-    const double * position, int geodetic, double * normal, double * angles);
+    const double * position, int geodetic, double step, double * normal,
+    double * angles);
 
 /* Check if the given local position is above the ground */
-int gt_ground_above(
-    const struct gt_topography * topography, const double * position, int * status);
+int gt_ground_above(const struct gt_topography * topography,
+    const double * position, int * status);
 
 #endif

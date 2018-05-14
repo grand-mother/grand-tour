@@ -26,7 +26,7 @@ print "o Sampling the slope vertical angle ..."
 slope = numpy.zeros((len(y), len(x)))
 for i, yi in enumerate(y):
     for j, xj in enumerate(x):
-        slope[i, j] = topo.ground_normal(xj, yi, angles=True)[1]
+        slope[i, j] = topo.ground_normal(xj, yi, step=200., angles=True)[1]
 print "  --> Done in {:.1f}s".format(time.time() - t0)
 
 # Sample the geodetic altitude over a mesh in UTM coordinates.

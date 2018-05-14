@@ -298,18 +298,19 @@ static PyObject * topography_ground_normal(
     TopographyObject * self, PyObject * args, PyObject * kwargs)
 {
         /* Parse the arguments. */
-        double position[2];
+        double position[2], step = -1.;
         int geodetic = 0, compute_angles = 0;
 
-        static char * kwlist[] = { "x", "y", "geodetic", "angles", NULL };
-        if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dd|bb", kwlist,
-                position, position + 1, &geodetic, &compute_angles))
+        static char * kwlist[] = { "x", "y", "geodetic", "step", "angles",
+                NULL };
+        if (!PyArg_ParseTupleAndKeywords(args, kwargs, "dd|bdb", kwlist,
+                position, position + 1, &geodetic, &step, &compute_angles))
                 return NULL;
 
         double normal[3] = { 0., 0., 0. }, angles_[2] = { 0., 0. };
         double * angles_v = compute_angles ? angles_ : NULL;
-        if (gt_ground_normal(&self->topography, position, geodetic, normal,
-                angles_v) != TURTLE_RETURN_SUCCESS)
+        if (gt_ground_normal(&self->topography, position, geodetic, step,
+                normal, angles_v) != TURTLE_RETURN_SUCCESS)
                 return NULL;
 
         if (compute_angles) {

@@ -428,13 +428,13 @@ int gt_ground_distance(struct gt_topography * topography,
 
 /* Get the normal to the ground in local frame coordinates */
 static int ground_normal_local(const struct gt_topography * topography,
-    const double * position, double * normal)
+    const double * position, double step, double * normal)
 {
         /* Estimate the local slope using an adaptation of S. Le Coz's
          * algorithm.
          */
         enum turtle_return rc;
-        const double ds = 10.;
+        const double ds = (step <= 0.) ? 10. : step;
         double zx0, zx1, zy0, zy1;
         if ((rc = ground_elevation_local(topography, position[0] - 0.5 * ds,
                  position[1], &zx0)) != TURTLE_RETURN_SUCCESS)
@@ -469,7 +469,8 @@ static int ground_normal_local(const struct gt_topography * topography,
 
 /* Get the normal to the ground in local or geodetic coordinates */
 int gt_ground_normal(const struct gt_topography * topography,
-    const double * position, int geodetic, double * normal, double * angles)
+    const double * position, int geodetic, double step, double * normal,
+    double * angles)
 {
         int rc;
         double tmp[3];
@@ -507,8 +508,8 @@ int gt_ground_normal(const struct gt_topography * topography,
                         position = tmp;
                 }
 
-                if ((rc = ground_normal_local(topography, position, normal)) !=
-                    TURTLE_RETURN_SUCCESS)
+                if ((rc = ground_normal_local(topography, position, step,
+                         normal)) != TURTLE_RETURN_SUCCESS)
                         return rc;
         }
 
