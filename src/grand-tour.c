@@ -84,18 +84,14 @@ int gt_initialise(struct gt_topography * topography, double latitude,
          * Compute the local frame using GRAND conventions, i.e. x-axis goes
          * from South to North, y-axis goes from East to West.
          */
-        if ((rc = turtle_datum_ecef(topography->datum, latitude, longitude, 0.,
-                 topography->origin)) != TURTLE_RETURN_SUCCESS)
-                return rc;
-        if ((rc = turtle_datum_direction(topography->datum, latitude, longitude,
-                 0., 0., &topography->base[0][0])) != TURTLE_RETURN_SUCCESS)
-                return rc;
-        if ((rc = turtle_datum_direction(topography->datum, latitude, longitude,
-                 270., 0., &topography->base[1][0])) != TURTLE_RETURN_SUCCESS)
-                return rc;
-        if ((rc = turtle_datum_direction(topography->datum, latitude, longitude,
-                 0., 90., &topography->base[2][0])) != TURTLE_RETURN_SUCCESS)
-                return rc;
+        turtle_datum_ecef(topography->datum, latitude, longitude, 0.,
+            topography->origin);
+        turtle_datum_direction(topography->datum, latitude, longitude,
+            0., 0., &topography->base[0][0]);
+        turtle_datum_direction(topography->datum, latitude, longitude,
+            270., 0., &topography->base[1][0]);
+        turtle_datum_direction(topography->datum, latitude, longitude,
+            0., 90., &topography->base[2][0]);
 
         return TURTLE_RETURN_SUCCESS;
 }
@@ -125,9 +121,7 @@ int gt_to_lla(
 {
         double ecef[3];
         gt_to_ecef(topography, local, 0, ecef);
-        return turtle_datum_geodetic(
-            topography->datum, ecef, lla, lla + 1, lla + 2);
-
+        turtle_datum_geodetic(topography->datum, ecef, lla, lla + 1, lla + 2);
         return TURTLE_RETURN_SUCCESS;
 }
 
@@ -191,11 +185,8 @@ void gt_from_ecef(const struct gt_topography * topography, const double * ecef,
 int gt_from_lla(
     const struct gt_topography * topography, const double * lla, double * local)
 {
-        enum turtle_return rc;
         double ecef[3];
-        if ((rc = turtle_datum_ecef(topography->datum, lla[0], lla[1], lla[2],
-                 ecef)) != TURTLE_RETURN_SUCCESS)
-                return rc;
+        turtle_datum_ecef(topography->datum, lla[0], lla[1], lla[2], ecef);
         gt_from_ecef(topography, ecef, 0, local);
         return TURTLE_RETURN_SUCCESS;
 }
@@ -229,9 +220,8 @@ int gt_from_angular(const struct gt_topography * topography,
         double ecef[3];
         const double azimuth = -angular[1];
         const double elevation = 90. - angular[0];
-        if ((rc = turtle_datum_direction(topography->datum, lla[0], lla[1],
-                 azimuth, elevation, ecef)) != TURTLE_RETURN_SUCCESS)
-                return rc;
+        turtle_datum_direction(topography->datum, lla[0], lla[1],
+            azimuth, elevation, ecef);
         gt_from_ecef(topography, ecef, 1, direction);
 
         return TURTLE_RETURN_SUCCESS;
@@ -489,9 +479,8 @@ int gt_ground_normal(const struct gt_topography * topography,
                 }
 
                 double ecef[3];
-                if ((rc = turtle_datum_direction(topography->datum, position[0],
-                         position[1], 0., 90., ecef)) != TURTLE_RETURN_SUCCESS)
-                        return rc;
+                turtle_datum_direction(topography->datum, position[0],
+                    position[1], 0., 90., ecef);
                 gt_from_ecef(topography, ecef, 1, normal);
         } else {
                 /* Estimate the local slope of the ground. */
